@@ -1,6 +1,7 @@
 package com.pbanakar.ratelimiter.core;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -9,6 +10,14 @@ import java.time.Instant;
 import java.time.ZoneId;
 
 import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Tests for {@link SlidingWindowRateLimiter}.
@@ -185,5 +194,96 @@ class SlidingWindowRateLimiterTest {
         // client-A is still exhausted (no time passed).
         assertFalse(limiter.tryAcquire("client-A"),
                 "client-A should still be exhausted");
+    }
+
+    // ===============================================================
+    // Phase 2: Concurrency tests
+    // ===============================================================
+
+    /**
+     * 50 threads compete for a limiter with maxRequests=5, same clientId.
+     * Exactly 5 must succeed, 45 must be rejected.
+     * <p>Repeated 20 times — race conditions are intermittent, so a single
+     * run can pass by luck.
+     */
+    @RepeatedTest(20)
+    @DisplayName("Concurrency: exactly maxRequests allowed when N threads compete")
+    void concurrentSameClient_exactlyMaxRequestsAllowed() throws Exception {
+        int maxRequests = 5;
+        int threadCount = 50;
+        long windowMs = 60_000; // 60s window — won't expire during the test
+        SlidingWindowRateLimiter limiter = new SlidingWindowRateLimiter(maxRequests, windowMs);
+
+        CountDownLatch ready = new CountDownLatch(threadCount);
+        CountDownLatch go = new CountDownLatch(1);
+        AtomicInteger allowed = new AtomicInteger(0);
+
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < threadCount; i++) {
+            futures.add(pool.submit(() -> {
+                ready.countDown();       // signal "I'm ready"
+                try { go.await(); }      // wait for the start gun
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                if (limiter.tryAcquire("shared-client")) {
+                    allowed.incrementAndGet();
+                }
+            }));
+        }
+
+        ready.await();   // wait until all threads are staged
+        go.countDown();  // fire!
+
+        for (Future<?> f : futures) { f.get(); } // wait for all to finish
+        pool.shutdown();
+
+        assertEquals(maxRequests, allowed.get(),
+                "Exactly " + maxRequests + " requests should be allowed, but got " + allowed.get());
+    }
+
+    /**
+     * Two brand-new clientIds arrive concurrently from many threads each.
+     * Verifies that computeIfAbsent creates independent deques without
+     * lost updates or cross-client contamination.
+     */
+    @RepeatedTest(20)
+    @DisplayName("Concurrency: two new clients initialized concurrently get independent state")
+    void concurrentNewClients_independentState() throws Exception {
+        int maxRequests = 3;
+        long windowMs = 60_000;
+        int threadsPerClient = 20;
+        SlidingWindowRateLimiter limiter = new SlidingWindowRateLimiter(maxRequests, windowMs);
+
+        CountDownLatch ready = new CountDownLatch(threadsPerClient * 2);
+        CountDownLatch go = new CountDownLatch(1);
+        AtomicInteger allowedA = new AtomicInteger(0);
+        AtomicInteger allowedB = new AtomicInteger(0);
+
+        ExecutorService pool = Executors.newFixedThreadPool(threadsPerClient * 2);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < threadsPerClient; i++) {
+            futures.add(pool.submit(() -> {
+                ready.countDown();
+                try { go.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                if (limiter.tryAcquire("client-A")) allowedA.incrementAndGet();
+            }));
+            futures.add(pool.submit(() -> {
+                ready.countDown();
+                try { go.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                if (limiter.tryAcquire("client-B")) allowedB.incrementAndGet();
+            }));
+        }
+
+        ready.await();
+        go.countDown();
+        for (Future<?> f : futures) { f.get(); }
+        pool.shutdown();
+
+        assertEquals(maxRequests, allowedA.get(),
+                "client-A should get exactly " + maxRequests + " requests, got " + allowedA.get());
+        assertEquals(maxRequests, allowedB.get(),
+                "client-B should get exactly " + maxRequests + " requests, got " + allowedB.get());
     }
 }

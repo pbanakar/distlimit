@@ -1,8 +1,8 @@
 package com.pbanakar.ratelimiter.core;
 
 import java.time.Clock;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * Rate limiter that uses the <strong>Token Bucket</strong> algorithm.
@@ -30,9 +30,23 @@ import java.util.Map;
  *       {@code tryAcquire} is called.</li>
  * </ul>
  *
- * <h3>Thread safety</h3>
- * <p>This implementation is <strong>not</strong> thread-safe. Concurrent access
- * will be addressed in Phase 2.</p>
+ * <h3>Thread safety — locking strategy (Phase 2)</h3>
+ * <p>This implementation uses <strong>fine-grained, per-client locking</strong>:</p>
+ * <ol>
+ *   <li>The client → Bucket map is a {@link ConcurrentHashMap}. New entries are
+ *       created atomically via {@code computeIfAbsent}, which guarantees that
+ *       even if two threads call {@code tryAcquire} for a brand-new clientId at
+ *       the exact same instant, exactly one Bucket is created and shared.
+ *       A naive {@code if (!map.containsKey(id)) map.put(id, new Bucket(...))}
+ *       has a TOCTOU race: both threads could see "absent", both create a Bucket,
+ *       and one would silently overwrite the other, losing token state.</li>
+ *   <li>The refill + consume logic inside {@code tryAcquire} is a classic
+ *       check-then-act sequence (read tokens → refill → decrement). We protect
+ *       it by synchronizing on the individual {@code Bucket} object, so two
+ *       threads hitting <em>different</em> clients never contend for the same
+ *       lock. This is critical for multi-tenant systems: one client's high
+ *       traffic must not serialise another client's requests.</li>
+ * </ol>
  *
  * @see RateLimiter
  */
@@ -41,10 +55,15 @@ public class TokenBucketRateLimiter implements RateLimiter {
     private final int capacity;
     private final double refillRate; // tokens per second
     private final Clock clock;
-    private final Map<String, Bucket> buckets;
+
+    // ConcurrentHashMap ensures thread-safe reads/writes to the map itself.
+    // Individual Bucket mutations are further protected by synchronized(bucket).
+    private final ConcurrentMap<String, Bucket> buckets;
 
     /**
      * Internal per-client bucket state.
+     * <p>Access to mutable fields ({@code tokens}, {@code lastRefillNanos})
+     * must be guarded by {@code synchronized(this)}.
      */
     private static class Bucket {
         double tokens;
@@ -76,7 +95,7 @@ public class TokenBucketRateLimiter implements RateLimiter {
         this.capacity = capacity;
         this.refillRate = refillRate;
         this.clock = clock;
-        this.buckets = new HashMap<>();
+        this.buckets = new ConcurrentHashMap<>();
     }
 
     /**
@@ -106,27 +125,30 @@ public class TokenBucketRateLimiter implements RateLimiter {
     public boolean tryAcquire(String clientId) {
         long nowNanos = clock.instant().toEpochMilli() * 1_000_000L;
 
-        Bucket bucket = buckets.get(clientId);
-        if (bucket == null) {
-            // First request from this client — bucket starts full.
-            bucket = new Bucket(capacity, nowNanos);
-            buckets.put(clientId, bucket);
-        }
+        // computeIfAbsent is atomic: even if 50 threads arrive for a new clientId
+        // simultaneously, exactly one Bucket is created and all threads share it.
+        // A naive "get → check null → put" would race and could lose a Bucket.
+        Bucket bucket = buckets.computeIfAbsent(clientId,
+                k -> new Bucket(capacity, nowNanos));
 
-        // Refill tokens based on elapsed time.
-        long elapsedNanos = nowNanos - bucket.lastRefillNanos;
-        if (elapsedNanos > 0) {
-            double elapsedSeconds = elapsedNanos / 1_000_000_000.0;
-            double newTokens = elapsedSeconds * refillRate;
-            bucket.tokens = Math.min(capacity, bucket.tokens + newTokens);
-            bucket.lastRefillNanos = nowNanos;
-        }
+        // Fine-grained lock: only threads accessing the SAME client block each
+        // other. Threads for different clients proceed in parallel.
+        synchronized (bucket) {
+            // Refill tokens based on elapsed time.
+            long elapsedNanos = nowNanos - bucket.lastRefillNanos;
+            if (elapsedNanos > 0) {
+                double elapsedSeconds = elapsedNanos / 1_000_000_000.0;
+                double newTokens = elapsedSeconds * refillRate;
+                bucket.tokens = Math.min(capacity, bucket.tokens + newTokens);
+                bucket.lastRefillNanos = nowNanos;
+            }
 
-        // Try to consume one token.
-        if (bucket.tokens >= 1.0) {
-            bucket.tokens -= 1.0;
-            return true;
+            // Try to consume one token.
+            if (bucket.tokens >= 1.0) {
+                bucket.tokens -= 1.0;
+                return true;
+            }
+            return false;
         }
-        return false;
     }
 }

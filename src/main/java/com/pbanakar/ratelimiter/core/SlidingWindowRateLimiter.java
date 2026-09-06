@@ -3,8 +3,8 @@ package com.pbanakar.ratelimiter.core;
 import java.time.Clock;
 import java.util.ArrayDeque;
 import java.util.Deque;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 /**
  * Rate limiter that uses the <strong>Sliding Window Log</strong> algorithm.
@@ -44,9 +44,17 @@ import java.util.Map;
  *       the most recent window.</li>
  * </ul>
  *
- * <h3>Thread safety</h3>
- * <p>This implementation is <strong>not</strong> thread-safe. Concurrent access
- * will be addressed in Phase 2.</p>
+ * <h3>Thread safety — locking strategy (Phase 2)</h3>
+ * <p>Same fine-grained approach as {@link TokenBucketRateLimiter}:</p>
+ * <ol>
+ *   <li>The client → Deque map is a {@link ConcurrentHashMap}. New deques are
+ *       created atomically via {@code computeIfAbsent}, avoiding the TOCTOU
+ *       race where two threads could both see "absent" and silently overwrite
+ *       each other's deque.</li>
+ *   <li>The evict-check-add sequence inside {@code tryAcquire} is guarded by
+ *       {@code synchronized(log)} — the per-client deque object itself serves
+ *       as the lock. Threads accessing different clients never contend.</li>
+ * </ol>
  *
  * @see RateLimiter
  */
@@ -55,7 +63,10 @@ public class SlidingWindowRateLimiter implements RateLimiter {
     private final int maxRequests;
     private final long windowSizeMillis;
     private final Clock clock;
-    private final Map<String, Deque<Long>> clientLogs;
+
+    // ConcurrentHashMap ensures thread-safe reads/writes to the map itself.
+    // Individual Deque mutations are further protected by synchronized(log).
+    private final ConcurrentMap<String, Deque<Long>> clientLogs;
 
     /**
      * Creates a new Sliding Window Log rate limiter.
@@ -76,7 +87,7 @@ public class SlidingWindowRateLimiter implements RateLimiter {
         this.maxRequests = maxRequests;
         this.windowSizeMillis = windowSizeMillis;
         this.clock = clock;
-        this.clientLogs = new HashMap<>();
+        this.clientLogs = new ConcurrentHashMap<>();
     }
 
     /**
@@ -108,19 +119,28 @@ public class SlidingWindowRateLimiter implements RateLimiter {
         long nowMillis = clock.instant().toEpochMilli();
         long boundary = nowMillis - windowSizeMillis;
 
+        // computeIfAbsent is atomic: two threads creating deques for different
+        // (or the same) new clientIds won't corrupt the map or lose an entry.
+        // A naive "if (!map.containsKey(id)) map.put(id, new Deque())" races:
+        // both threads see "absent", both put, and one deque (with its recorded
+        // timestamps) is silently lost.
         Deque<Long> log = clientLogs.computeIfAbsent(clientId, k -> new ArrayDeque<>());
 
-        // Evict expired entries. The window is (boundary, now], so timestamps
-        // exactly equal to `boundary` are expired and removed.
-        while (!log.isEmpty() && log.peekFirst() <= boundary) {
-            log.pollFirst();
-        }
+        // Fine-grained lock: only threads for the SAME client serialise.
+        // Different clients proceed fully in parallel.
+        synchronized (log) {
+            // Evict expired entries. The window is (boundary, now], so timestamps
+            // exactly equal to `boundary` are expired and removed.
+            while (!log.isEmpty() && log.peekFirst() <= boundary) {
+                log.pollFirst();
+            }
 
-        if (log.size() < maxRequests) {
-            log.addLast(nowMillis);
-            return true;
-        }
+            if (log.size() < maxRequests) {
+                log.addLast(nowMillis);
+                return true;
+            }
 
-        return false;
+            return false;
+        }
     }
 }

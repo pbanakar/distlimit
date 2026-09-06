@@ -1,6 +1,7 @@
 package com.pbanakar.ratelimiter.core;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -9,6 +10,14 @@ import java.time.Instant;
 import java.time.ZoneId;
 
 import static org.junit.jupiter.api.Assertions.*;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Tests for {@link TokenBucketRateLimiter}.
@@ -194,5 +203,95 @@ class TokenBucketRateLimiterTest {
         clock.advance(Duration.ofSeconds(1));
         assertTrue(limiter.tryAcquire("client-1"),
                 "After 2 seconds at 0.5/sec, 1 token should be available");
+    }
+
+    // ===============================================================
+    // Phase 2: Concurrency tests
+    // ===============================================================
+
+    /**
+     * 50 threads compete for a bucket with capacity=5, same clientId.
+     * Exactly 5 must succeed, 45 must be rejected.
+     * <p>Repeated 20 times — race conditions are intermittent, so a single
+     * run can pass by luck.
+     */
+    @RepeatedTest(20)
+    @DisplayName("Concurrency: exactly capacity requests allowed when N threads compete")
+    void concurrentSameClient_exactlyCapacityAllowed() throws Exception {
+        int capacity = 5;
+        int threadCount = 50;
+        // Use system clock — all threads hit the same instant, no refill.
+        TokenBucketRateLimiter limiter = new TokenBucketRateLimiter(capacity, 1.0);
+
+        CountDownLatch ready = new CountDownLatch(threadCount);
+        CountDownLatch go = new CountDownLatch(1);
+        AtomicInteger allowed = new AtomicInteger(0);
+
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < threadCount; i++) {
+            futures.add(pool.submit(() -> {
+                ready.countDown();       // signal "I'm ready"
+                try { go.await(); }      // wait for the start gun
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                if (limiter.tryAcquire("shared-client")) {
+                    allowed.incrementAndGet();
+                }
+            }));
+        }
+
+        ready.await();   // wait until all threads are staged
+        go.countDown();  // fire!
+
+        for (Future<?> f : futures) { f.get(); } // wait for all to finish
+        pool.shutdown();
+
+        assertEquals(capacity, allowed.get(),
+                "Exactly " + capacity + " requests should be allowed, but got " + allowed.get());
+    }
+
+    /**
+     * Two brand-new clientIds arrive concurrently from many threads each.
+     * Verifies that computeIfAbsent creates independent buckets without
+     * lost updates or cross-client contamination.
+     */
+    @RepeatedTest(20)
+    @DisplayName("Concurrency: two new clients initialized concurrently get independent buckets")
+    void concurrentNewClients_independentBuckets() throws Exception {
+        int capacity = 3;
+        int threadsPerClient = 20;
+        TokenBucketRateLimiter limiter = new TokenBucketRateLimiter(capacity, 1.0);
+
+        CountDownLatch ready = new CountDownLatch(threadsPerClient * 2);
+        CountDownLatch go = new CountDownLatch(1);
+        AtomicInteger allowedA = new AtomicInteger(0);
+        AtomicInteger allowedB = new AtomicInteger(0);
+
+        ExecutorService pool = Executors.newFixedThreadPool(threadsPerClient * 2);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < threadsPerClient; i++) {
+            futures.add(pool.submit(() -> {
+                ready.countDown();
+                try { go.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                if (limiter.tryAcquire("client-A")) allowedA.incrementAndGet();
+            }));
+            futures.add(pool.submit(() -> {
+                ready.countDown();
+                try { go.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                if (limiter.tryAcquire("client-B")) allowedB.incrementAndGet();
+            }));
+        }
+
+        ready.await();
+        go.countDown();
+        for (Future<?> f : futures) { f.get(); }
+        pool.shutdown();
+
+        assertEquals(capacity, allowedA.get(),
+                "client-A should get exactly " + capacity + " tokens, got " + allowedA.get());
+        assertEquals(capacity, allowedB.get(),
+                "client-B should get exactly " + capacity + " tokens, got " + allowedB.get());
     }
 }

@@ -4,6 +4,14 @@ import com.pbanakar.ratelimiter.core.RateLimiter;
 import com.pbanakar.ratelimiter.core.SlidingWindowRateLimiter;
 import com.pbanakar.ratelimiter.core.TokenBucketRateLimiter;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * Interactive playground to experiment with both rate-limiting algorithms.
  *
@@ -17,7 +25,7 @@ import com.pbanakar.ratelimiter.core.TokenBucketRateLimiter;
  */
 public class Playground {
 
-    public static void main(String[] args) throws InterruptedException {
+    public static void main(String[] args) throws Exception {
         System.out.println("╔══════════════════════════════════════════════════╗");
         System.out.println("║        DistLimit — Rate Limiter Playground      ║");
         System.out.println("╚══════════════════════════════════════════════════╝");
@@ -25,6 +33,7 @@ public class Playground {
         tokenBucketDemo();
         slidingWindowDemo();
         multiClientDemo();
+        concurrencyDemo();
     }
 
     /**
@@ -96,6 +105,50 @@ public class Playground {
             boolean allowed = limiter.tryAcquire("bob");
             System.out.printf("  Bob   request %d: %s%n", i, allowed ? "✅ ALLOWED" : "❌ REJECTED");
         }
+    }
+
+    /**
+     * Phase 2 demo: demonstrates thread safety under concurrent access.
+     * 20 threads compete for a Token Bucket with capacity=5.
+     */
+    private static void concurrencyDemo() throws Exception {
+        System.out.println("\n── Concurrency Demo (Token Bucket, capacity=5, 20 threads) ──\n");
+
+        int capacity = 5;
+        int threadCount = 20;
+        RateLimiter limiter = new TokenBucketRateLimiter(capacity, 1.0);
+
+        CountDownLatch ready = new CountDownLatch(threadCount);
+        CountDownLatch go = new CountDownLatch(1);
+        AtomicInteger allowed = new AtomicInteger(0);
+        AtomicInteger rejected = new AtomicInteger(0);
+
+        ExecutorService pool = Executors.newFixedThreadPool(threadCount);
+        List<Future<?>> futures = new ArrayList<>();
+
+        for (int i = 0; i < threadCount; i++) {
+            final int threadNum = i + 1;
+            futures.add(pool.submit(() -> {
+                ready.countDown();
+                try { go.await(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                boolean result = limiter.tryAcquire("contested-client");
+                String status = result ? "✅ ALLOWED" : "❌ REJECTED";
+                System.out.printf("  Thread %2d: %s%n", threadNum, status);
+                if (result) allowed.incrementAndGet();
+                else rejected.incrementAndGet();
+            }));
+        }
+
+        ready.await();
+        System.out.println("All " + threadCount + " threads ready. Firing simultaneously...\n");
+        go.countDown();
+
+        for (Future<?> f : futures) { f.get(); }
+        pool.shutdown();
+
+        System.out.printf("%n  Summary: %d allowed, %d rejected (capacity was %d)%n",
+                allowed.get(), rejected.get(), capacity);
+        System.out.println("  " + (allowed.get() == capacity ? "✅ CORRECT" : "❌ BUG — race condition!"));
 
         System.out.println("\n════════════════════════════════════════════════════");
         System.out.println("  Done! Try changing the numbers and re-running.");
