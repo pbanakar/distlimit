@@ -4,6 +4,13 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.3</version>
+        <relativePath/>
+    </parent>
+
     <groupId>com.pbanakar</groupId>
     <artifactId>distributed-rate-limiter</artifactId>
     <version>1.0.0-SNAPSHOT</version>
@@ -12,21 +19,56 @@
     <name>Distributed Rate Limiter</name>
     <description>
         A distributed rate limiter built incrementally for learning.
-        Phase 1: in-memory, single-threaded Token Bucket and Sliding Window Log algorithms.
+        Phase 3: Spring Boot REST API with Redis-backed Token Bucket via Lua scripting.
     </description>
 
     <properties>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <junit.version>5.10.2</junit.version>
+        <java.version>21</java.version>
+        <testcontainers.version>1.21.4</testcontainers.version>
     </properties>
 
     <dependencies>
+        <!-- Spring Boot Web — REST controller -->
         <dependency>
-            <groupId>org.junit.jupiter</groupId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!--
+            Spring Data Redis with Lettuce (the default client).
+            Why Lettuce over Jedis?
+            - Lettuce is non-blocking and thread-safe by default (single connection shared
+              across threads via Netty), whereas Jedis requires connection pooling.
+            - Lettuce is the Spring Boot default — zero extra config needed.
+            - Both support EVAL (Lua scripts) equally well; Lettuce just fits the
+              Spring Boot ecosystem better out of the box.
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!-- ── Test dependencies ── -->
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Testcontainers — spins up a real Redis Docker container for integration tests.
+             We do NOT mock Redis: the whole point of Phase 3 is proving that the Lua
+             script executes atomically inside a real Redis server. -->
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>testcontainers</artifactId>
+            <version>${testcontainers.version}</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>${junit.version}</version>
+            <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
@@ -34,18 +76,42 @@
     <build>
         <plugins>
             <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+            <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
             </plugin>
+            <!-- Failsafe runs *IT.java integration tests in the `verify` phase -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.12.1</version>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <version>3.2.5</version>
                 <configuration>
-                    <source>21</source>
-                    <target>21</target>
+                    <!--
+                        Workaround for Testcontainers bug on Windows:
+                        If PATH contains entries with stray quotes (e.g. C:\...\Python314"),
+                        Testcontainers' DockerMachineClient.isInstalled() calls Paths.get()
+                        on each PATH entry and crashes with InvalidPathException.
+                        Setting DOCKER_HOST explicitly tells Testcontainers to use Docker
+                        Desktop's named pipe directly.
+                        The forkNode config ensures the forked JVM inherits a clean env.
+                    -->
+                    <environmentVariables>
+                        <DOCKER_HOST>npipe:////./pipe/dockerDesktopLinuxEngine</DOCKER_HOST>
+                        <TESTCONTAINERS_DOCKER_CLIENT_STRATEGY>org.testcontainers.dockerclient.NpipeSocketClientProviderStrategy</TESTCONTAINERS_DOCKER_CLIENT_STRATEGY>
+                    </environmentVariables>
                 </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

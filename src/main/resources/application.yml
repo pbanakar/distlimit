@@ -1,0 +1,14 @@
+server:
+  port: 8080
+
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+rate-limiter:
+  algorithm: redis-token-bucket   # Options: token-bucket, sliding-window, redis-token-bucket
+  capacity: 10                    # Max tokens (token-bucket) or max requests (sliding-window)
+  refill-rate: 1.0                # Tokens per second (token-bucket only)
+  window-size-millis: 60000       # Window in ms (sliding-window only)
