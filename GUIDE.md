@@ -429,3 +429,71 @@ done
 # Stop Redis
 docker stop redis-local && docker rm redis-local
 ```
+
+---
+
+## Phase 4: Proving it works across multiple instances
+
+### The claim to prove
+
+Phase 3 *implemented* distributed rate limiting. Phase 4 *proves* it works by
+running **3 separate JVMs** behind an **Nginx load balancer**, sharing **one
+Redis**, and firing 50 concurrent requests. If the Lua script is truly atomic,
+exactly 10 should be allowed (capacity=10) regardless of which instance
+handles each request.
+
+### The stack
+
+```
+                    ┌─── app1 (JVM 1) ───┐
+User → Nginx ──────┤─── app2 (JVM 2) ───┼──→ Redis (shared state)
+  (port 9090)       └─── app3 (JVM 3) ───┘
+```
+
+All defined in `docker-compose.yml`. Nginx round-robins requests. Each app
+instance connects to the same Redis. Health checks ensure Nginx only routes
+to instances that are ready.
+
+### Running the load test yourself
+
+```bash
+# Start everything
+docker compose up -d --build
+
+# Wait for all containers to be healthy
+docker compose ps
+
+# Flush Redis
+docker compose exec redis redis-cli FLUSHALL
+
+# Distributed test: 50 requests → Nginx → 3 instances
+docker run --rm --network distlimit_default \
+  -v "${PWD}/loadtest:/scripts" \
+  -e TARGET_URL=http://nginx:80 \
+  -e CLIENT_ID=dist-client \
+  grafana/k6:latest run /scripts/load-test.js
+
+# Flush Redis again
+docker compose exec redis redis-cli FLUSHALL
+
+# Control test: 50 requests → app1 only
+docker run --rm --network distlimit_default \
+  -v "${PWD}/loadtest:/scripts" \
+  -e TARGET_URL=http://app1:8080 \
+  -e CLIENT_ID=single-client \
+  grafana/k6:latest run /scripts/load-test.js
+
+# Tear down
+docker compose down
+```
+
+### Measured results
+
+| Test | Sent | Allowed | Rejected | Correct? |
+|------|------|---------|----------|----------|
+| Distributed (3 instances) | 50 | 10 | 40 | ✅ |
+| Single instance | 50 | 10 | 40 | ✅ |
+
+Both identical. Distributing across 3 JVMs changed nothing about correctness.
+The Redis Lua script is the reason — it's the single point of atomic
+truth, no matter which JVM calls it.

@@ -1,0 +1,10 @@
+target/
+.git/
+.idea/
+*.iml
+results/
+loadtest/
+.gitignore
+README.md
+GUIDE.md
+*.md
