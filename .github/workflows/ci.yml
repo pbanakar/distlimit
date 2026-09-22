@@ -7,7 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
+  test:
+    name: Unit + Integration Tests
     runs-on: ubuntu-latest
 
     steps:
@@ -20,5 +21,50 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
-      - name: Build and test
+      - name: Run all tests (unit + Testcontainers integration)
         run: mvn --batch-mode --no-transfer-progress verify
+
+  docker:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t distlimit:ci .
+
+      - name: Verify image starts and health check passes
+        run: |
+          # Start Redis + the app
+          docker network create ci-net
+          docker run -d --name redis --network ci-net redis:7-alpine
+          docker run -d --name app --network ci-net \
+            -e SPRING_DATA_REDIS_HOST=redis \
+            -p 8080:8080 \
+            distlimit:ci
+
+          # Wait for Spring Boot to be ready (up to 30s)
+          echo "Waiting for app to start..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/actuator/health > /dev/null 2>&1; then
+              echo "App is healthy!"
+              break
+            fi
+            sleep 1
+          done
+
+          # Verify health endpoint
+          curl -sf http://localhost:8080/actuator/health
+
+          # Verify rate limit endpoint works
+          RESPONSE=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+            "http://localhost:8080/api/v1/rate-limit/check?clientId=ci-test")
+          echo "Rate limit check returned: $RESPONSE"
+          [ "$RESPONSE" = "200" ] || exit 1
+
+          # Cleanup
+          docker stop app redis
+          docker rm app redis
+          docker network rm ci-net

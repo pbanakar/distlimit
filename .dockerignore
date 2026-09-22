@@ -2,9 +2,7 @@ target/
 .git/
 .idea/
 *.iml
-results/
 loadtest/
+docs/
 .gitignore
-README.md
-GUIDE.md
 *.md

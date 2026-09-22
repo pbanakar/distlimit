@@ -12,3 +12,5 @@ rate-limiter:
   capacity: 10                    # Max tokens (token-bucket) or max requests (sliding-window)
   refill-rate: 1.0                # Tokens per second (token-bucket only)
   window-size-millis: 60000       # Window in ms (sliding-window only)
+  fail-open: true                 # If true, allow requests when Redis is unreachable
+

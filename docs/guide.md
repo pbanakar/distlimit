@@ -73,7 +73,7 @@ APIs work (AWS, Stripe, GitHub).
 
 **Try it:**
 ```bash
-mvn compile exec:java -Dexec.mainClass="com.pbanakar.ratelimiter.Playground"
+mvn compile exec:java "-Dexec.mainClass=com.pbanakar.ratelimiter.Playground"
 ```
 
 You'll see:
@@ -405,7 +405,7 @@ mvn verify
 
 ```bash
 # Run the Playground (no Docker needed)
-mvn compile exec:java -Dexec.mainClass="com.pbanakar.ratelimiter.Playground"
+mvn compile exec:java "-Dexec.mainClass=com.pbanakar.ratelimiter.Playground"
 
 # Run unit tests
 mvn test
