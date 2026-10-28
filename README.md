@@ -6,11 +6,7 @@ A distributed rate limiter in Java that enforces request limits across multiple 
 
 ## Architecture
 
-```
-              ┌─── app1 (JVM 1) ───┐
-Client → Nginx ──┤─── app2 (JVM 2) ───┼──→ Redis (shared state, Lua atomicity)
-          :9090  └─── app3 (JVM 3) ───┘
-```
+![DistLimit Architecture](docs/assets/distlimit.png)
 
 ## Quick Start
 
