@@ -51,7 +51,7 @@ in a single-threaded, in-memory database.
 ## The Lua Script, Line by Line
 
 ```lua
--- KEYS[1] = Redis hash key for this client
+-- KEYS[1] = policy-scoped Redis hash key for this client
 -- ARGV[1] = capacity (max tokens)
 -- ARGV[2] = refillRate (tokens per second)
 -- ARGV[3] = current time in milliseconds
@@ -127,8 +127,8 @@ Redis's Lua script cache is **in-memory only**. When Redis restarts:
 3. The next `EVALSHA` call gets `NOSCRIPT`, and Spring automatically falls
    back to `EVAL`, which re-caches the script
 
-For rate limiting, losing state on restart is acceptable — all buckets reset
-to full, which means clients get a temporary "free" window. This is far
+For rate limiting, losing state on restart is acceptable — all policy buckets
+reset to full, which means clients get a temporary "free" window. This is far
 better than the alternative of blocking all requests until state is
 reconstructed.
 

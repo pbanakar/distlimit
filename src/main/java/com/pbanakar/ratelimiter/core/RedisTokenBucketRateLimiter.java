@@ -53,6 +53,7 @@ public class RedisTokenBucketRateLimiter implements RateLimiter {
 
     private final int capacity;
     private final double refillRate;
+    private final String policyName;
     private final Clock clock;
     private final StringRedisTemplate redisTemplate;
     private final DefaultRedisScript<Long> luaScript;
@@ -67,6 +68,15 @@ public class RedisTokenBucketRateLimiter implements RateLimiter {
      */
     public RedisTokenBucketRateLimiter(int capacity, double refillRate,
                                        Clock clock, StringRedisTemplate redisTemplate) {
+        this(capacity, refillRate, clock, redisTemplate, "default");
+    }
+
+    /**
+     * Creates a Redis-backed limiter whose state is isolated by policy name.
+     */
+    public RedisTokenBucketRateLimiter(int capacity, double refillRate,
+                                       Clock clock, StringRedisTemplate redisTemplate,
+                                       String policyName) {
         if (capacity < 1) {
             throw new IllegalArgumentException("capacity must be >= 1, got " + capacity);
         }
@@ -77,6 +87,11 @@ public class RedisTokenBucketRateLimiter implements RateLimiter {
         this.refillRate = refillRate;
         this.clock = clock;
         this.redisTemplate = redisTemplate;
+        if (policyName == null || policyName.isBlank() || !policyName.matches("[A-Za-z0-9_-]+")) {
+            throw new IllegalArgumentException(
+                    "policyName must contain only letters, numbers, '-' or '_'");
+        }
+        this.policyName = policyName;
         this.luaScript = loadLuaScript();
     }
 
@@ -86,6 +101,11 @@ public class RedisTokenBucketRateLimiter implements RateLimiter {
     public RedisTokenBucketRateLimiter(int capacity, double refillRate,
                                        StringRedisTemplate redisTemplate) {
         this(capacity, refillRate, Clock.systemUTC(), redisTemplate);
+    }
+
+    public RedisTokenBucketRateLimiter(int capacity, double refillRate,
+                                       StringRedisTemplate redisTemplate, String policyName) {
+        this(capacity, refillRate, Clock.systemUTC(), redisTemplate, policyName);
     }
 
     private DefaultRedisScript<Long> loadLuaScript() {
@@ -109,7 +129,7 @@ public class RedisTokenBucketRateLimiter implements RateLimiter {
      */
     @Override
     public boolean tryAcquire(String clientId) {
-        String key = KEY_PREFIX + clientId;
+        String key = KEY_PREFIX + policyName + ":" + clientId;
         long nowMs = clock.instant().toEpochMilli();
 
         // EVAL executes the Lua script atomically on the Redis server.

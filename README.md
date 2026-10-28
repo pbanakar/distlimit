@@ -28,6 +28,19 @@ docker run --rm --network distlimit_default -v "${PWD}/loadtest:/scripts" \
 
 Both identical — distributing across 3 JVMs changed nothing about correctness.
 
+## Configurable policies
+
+Requests can select a named policy with the optional `policy` parameter:
+
+```bash
+curl -X POST "http://localhost:8080/api/v1/rate-limit/check?clientId=alice&policy=premium"
+```
+
+Policies are configured independently in `application.yml`. For example,
+`free` and `premium` can use different capacities and refill rates while
+keeping separate Redis buckets for the same client. The `default` policy is
+used when `policy` is omitted.
+
 ## Documentation
 
 | Doc | What's in it |
@@ -39,11 +52,3 @@ Both identical — distributing across 3 JVMs changed nothing about correctness.
 | [Redis Atomicity](docs/redis-atomicity.md) | Why GET-SET fails, Lua fix, EVAL vs EVALSHA, script walkthrough |
 | [Contributing](CONTRIBUTING.md) | Prerequisites, how to run tests, commit format |
 | [Full Guide](docs/guide.md) | End-to-end walkthrough for learning the project from scratch |
-
-## Phase Status
-
-- ✅ Phase 1: Core algorithms (Token Bucket + Sliding Window) with unit tests
-- ✅ Phase 2: Thread-safety with fine-grained per-client locking
-- ✅ Phase 3: Redis-backed distributed rate limiting via Lua + Spring Boot REST API
-- ✅ Phase 4: Dockerized multi-instance deployment + k6 load test proof
-- ✅ Phase 5: Documentation, fail-open resilience, production polish

@@ -161,3 +161,21 @@ malicious client could exploit this window. In practice, Redis outages are
 rare and short, and the alternative (complete API unavailability) is almost
 always worse. This is configurable: set `rate-limiter.fail-open: false` for
 environments where rate enforcement is more important than availability.
+
+---
+
+## Named policies
+
+**Chose:** Resolve a named policy to an independently configured limiter and
+include the policy name in the Redis key.
+
+**Why this one:** Different APIs and customer tiers need different budgets.
+Keeping each policy as its own limiter preserves algorithm-specific behavior
+and ensures that `free` and `premium` traffic for the same client cannot share
+or overwrite bucket state.
+
+**Tradeoff:** Every configured policy creates a limiter instance, and the
+policy catalog is fixed at application startup. Dynamic policy updates and
+administrative APIs can be added later without changing the request contract.
+Unknown policies return `400 Bad Request` rather than silently using a less
+restrictive policy.

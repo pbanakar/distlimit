@@ -49,16 +49,24 @@ public class RateLimitController {
      *         200 OK if Redis is down and fail-open is enabled;
      *         500 Internal Server Error if Redis is down and fail-open is disabled
      */
+    public ResponseEntity<Map<String, Object>> checkRateLimit(String clientId) {
+        return checkRateLimit(clientId, "default");
+    }
+
     @PostMapping("/check")
     public ResponseEntity<Map<String, Object>> checkRateLimit(
-            @RequestParam String clientId) {
+            @RequestParam String clientId,
+            @RequestParam(defaultValue = "default") String policy) {
 
         try {
-            boolean allowed = rateLimiter.tryAcquire(clientId);
+            boolean allowed = rateLimiter.tryAcquire(clientId, policy);
 
             HttpStatus status = allowed ? HttpStatus.OK : HttpStatus.TOO_MANY_REQUESTS;
             return ResponseEntity.status(status)
                     .body(Map.of("allowed", allowed));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest()
+                    .body(Map.of("allowed", false, "error", e.getMessage()));
         } catch (Exception e) {
             if (failOpen) {
                 log.warn("Redis unavailable — failing open, request allowed", e);

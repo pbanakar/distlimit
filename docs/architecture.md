@@ -40,10 +40,11 @@ Here's what happens when a single request arrives:
    Say it picks `app2:8080`. Nginx forwards the request.
 
 3. **Spring Boot controller** (`RateLimitController.checkRateLimit()`)
-   receives the request and calls `rateLimiter.tryAcquire("alice")`.
+   receives the request, resolves the optional policy (defaulting to
+   `default`), and calls `rateLimiter.tryAcquire("alice", "premium")`.
 
-4. **RedisTokenBucketRateLimiter** builds the Redis key
-   `rate_limit:token_bucket:alice`, captures the current timestamp, and
+4. **RedisTokenBucketRateLimiter** builds the policy-scoped Redis key
+   `rate_limit:token_bucket:premium:alice`, captures the current timestamp, and
    calls `redisTemplate.execute(luaScript, key, capacity, refillRate, nowMs)`.
 
 5. **Redis receives the EVAL command** and begins executing the Lua script

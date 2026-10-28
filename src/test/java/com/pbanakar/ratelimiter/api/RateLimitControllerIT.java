@@ -27,7 +27,13 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         properties = {
                 "rate-limiter.algorithm=redis-token-bucket",
                 "rate-limiter.capacity=3",
-                "rate-limiter.refill-rate=0.001"
+                "rate-limiter.refill-rate=0.001",
+                "rate-limiter.policies.default.capacity=3",
+                "rate-limiter.policies.default.refill-rate=0.001",
+                "rate-limiter.policies.free.capacity=2",
+                "rate-limiter.policies.free.refill-rate=0.001",
+                "rate-limiter.policies.premium.capacity=4",
+                "rate-limiter.policies.premium.refill-rate=0.001"
         })
 @AutoConfigureMockMvc
 @Testcontainers
@@ -93,5 +99,35 @@ class RateLimitControllerIT {
                         .param("clientId", "client-B"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.allowed").value(true));
+    }
+
+    @Test
+    @DisplayName("Named policies provide independent limits for the same client")
+    void checkEndpoint_namedPolicies() throws Exception {
+        for (int i = 0; i < 2; i++) {
+            mockMvc.perform(post("/api/v1/rate-limit/check")
+                            .param("clientId", "tiered-client")
+                            .param("policy", "free"))
+                    .andExpect(status().isOk());
+        }
+        mockMvc.perform(post("/api/v1/rate-limit/check")
+                        .param("clientId", "tiered-client")
+                        .param("policy", "free"))
+                .andExpect(status().isTooManyRequests());
+
+        mockMvc.perform(post("/api/v1/rate-limit/check")
+                        .param("clientId", "tiered-client")
+                        .param("policy", "premium"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    @DisplayName("Unknown policy returns bad request")
+    void checkEndpoint_unknownPolicy() throws Exception {
+        mockMvc.perform(post("/api/v1/rate-limit/check")
+                        .param("clientId", "client-1")
+                        .param("policy", "unknown"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.allowed").value(false));
     }
 }

@@ -8,9 +8,19 @@ spring:
       port: 6379
 
 rate-limiter:
-  algorithm: redis-token-bucket   # Options: token-bucket, sliding-window, redis-token-bucket
-  capacity: 10                    # Max tokens (token-bucket) or max requests (sliding-window)
-  refill-rate: 1.0                # Tokens per second (token-bucket only)
-  window-size-millis: 60000       # Window in ms (sliding-window only)
-  fail-open: true                 # If true, allow requests when Redis is unreachable
-
+  # Legacy top-level values are used as defaults when policies are omitted.
+  algorithm: redis-token-bucket
+  capacity: 10
+  refill-rate: 1.0
+  window-size-millis: 60000
+  fail-open: true
+  policies:
+    default:
+      capacity: 10
+      refill-rate: 1.0
+    free:
+      capacity: 100
+      refill-rate: 1.6667
+    premium:
+      capacity: 1000
+      refill-rate: 16.6667

@@ -331,6 +331,36 @@ rate-limiter:
   window-size-millis: 60000       # Sliding window only
 ```
 
+### Named policies
+
+Policies allow different client tiers or APIs to use different limits:
+
+```yaml
+rate-limiter:
+  policies:
+    default:
+      capacity: 10
+      refill-rate: 1.0
+    free:
+      capacity: 100
+      refill-rate: 1.6667
+    premium:
+      capacity: 1000
+      refill-rate: 16.6667
+```
+
+Call a policy explicitly:
+
+```bash
+curl -X POST \
+  "http://localhost:8080/api/v1/rate-limit/check?clientId=alice&policy=premium"
+```
+
+If `policy` is omitted, `default` is used. Each policy has an independent
+bucket, including when the same client uses multiple policies. An unknown
+policy returns `400 Bad Request`. Policies may also override `algorithm`;
+otherwise the top-level algorithm and values are used as defaults.
+
 **To experiment:** change `capacity` to `3` and `refill-rate` to `0.5`, restart,
 and you'll see limits hit much faster.
 
@@ -356,6 +386,8 @@ mvn verify
 | Concurrent threads (Phase 2) | 20 threads, 1 bucket → exactly `capacity` allowed |
 | Concurrent threads on Redis (Phase 3) | 50 threads hitting Redis simultaneously → exactly `capacity` allowed |
 | REST endpoint 200/429 | Correct HTTP status codes and JSON body |
+| Named policies | Same client gets independent free and premium limits |
+| Unknown policy | Invalid policy names return `400 Bad Request` |
 
 ---
 
